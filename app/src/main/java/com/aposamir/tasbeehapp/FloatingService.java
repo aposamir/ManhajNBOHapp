@@ -103,17 +103,9 @@ public class FloatingService extends Service {
             layoutFlag = WindowManager.LayoutParams.TYPE_PHONE;
         }
 
-        floatingView.measure(
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        int naturalWidth = floatingView.getMeasuredWidth();
-        int naturalHeight = floatingView.getMeasuredHeight();
-        int scaledWidth = (int) Math.round(naturalWidth * scale);
-        int scaledHeight = (int) Math.round(naturalHeight * scale);
-
         params = new WindowManager.LayoutParams(
-                scaledWidth > 0 ? scaledWidth : WindowManager.LayoutParams.WRAP_CONTENT,
-                scaledHeight > 0 ? scaledHeight : WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
                 layoutFlag,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT);
@@ -124,6 +116,8 @@ public class FloatingService extends Service {
 
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         windowManager.addView(floatingView, params);
+
+        applyVisualScale(scale);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(webReceiver, new IntentFilter("WEB_UPDATED"), Context.RECEIVER_NOT_EXPORTED);
@@ -165,20 +159,15 @@ public class FloatingService extends Service {
         });
     }
 
+    private void applyVisualScale(double scale) {
+        if (floatingView == null) return;
+        float s = (float) scale;
+        floatingView.setScaleX(s);
+        floatingView.setScaleY(s);
+    }
+
     private void applyScale(double scale) {
-        if (floatingView == null || params == null || windowManager == null) return;
-
-        floatingView.measure(
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        int naturalWidth = floatingView.getMeasuredWidth();
-        int naturalHeight = floatingView.getMeasuredHeight();
-
-        if (naturalWidth > 0 && naturalHeight > 0) {
-            params.width = (int) Math.round(naturalWidth * scale);
-            params.height = (int) Math.round(naturalHeight * scale);
-            windowManager.updateViewLayout(floatingView, params);
-        }
+        applyVisualScale(scale);
     }
 
     @Override
@@ -194,4 +183,4 @@ public class FloatingService extends Service {
         } catch (IllegalArgumentException e) {
         }
     }
-} 
+}

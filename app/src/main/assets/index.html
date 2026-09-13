@@ -506,6 +506,13 @@
     justify-content:center;
   }
   .confirm-actions .btn{ flex:1; }
+  .name-overlay-poem{
+    font-family: serif;
+    color: var(--gold-soft);
+    font-size:0.95rem;
+    line-height:2;
+    text-shadow: 0 0 14px rgba(228,200,136,0.2);
+  }
   .in-app-bubble{
     position:fixed;
     left: 16px; top: 90px;
@@ -566,7 +573,6 @@
   <div class="cycles" id="cyclesLabel"></div>
 
   <div class="controls">
-    <button class="btn" id="targetBtn">تغيير الهدف</button>
     <button class="btn danger" id="resetBtn">🔄 تصفير</button>
   </div>
   <div class="controls">
@@ -642,6 +648,19 @@
   </div>
 </div>
 
+<div class="confirm-overlay" id="nameOverlay">
+  <div class="confirm-box">
+    <p class="name-overlay-poem">شاركنا اسمك الكريم، فيه نرتقي،<br>فنحو المليار صلاة على الحبيب ﷺ نمضي</p>
+    <div class="name-input-area" style="margin-top:6px;">
+      <input type="text" id="nameOverlayInput" placeholder="✏️ اسمك الكريم" maxlength="20">
+    </div>
+    <div class="confirm-actions" style="margin-top:14px;">
+      <button class="btn gold" id="nameOverlaySaveBtn">✅ حفظ والمتابعة</button>
+      <button class="btn" id="nameOverlaySkipBtn">لاحقًا</button>
+    </div>
+  </div>
+</div>
+
 <div id="inAppBubble" class="in-app-bubble" style="display:none;">
   <span id="inAppBubbleCount">0</span>
 </div>
@@ -674,7 +693,6 @@
     const personalResetBtn = document.getElementById('personalResetBtn');
     const cyclesLabel = document.getElementById('cyclesLabel');
     const resetBtn = document.getElementById('resetBtn');
-    const targetBtn = document.getElementById('targetBtn');
     const dhikrSelect = document.getElementById('dhikrSelect');
     const toast = document.getElementById('toast');
     const manualInput = document.getElementById('manualInput');
@@ -700,6 +718,10 @@
     const confirmMessage = document.getElementById('confirmMessage');
     const confirmOkBtn = document.getElementById('confirmOkBtn');
     const confirmCancelBtn = document.getElementById('confirmCancelBtn');
+    const nameOverlay = document.getElementById('nameOverlay');
+    const nameOverlayInput = document.getElementById('nameOverlayInput');
+    const nameOverlaySaveBtn = document.getElementById('nameOverlaySaveBtn');
+    const nameOverlaySkipBtn = document.getElementById('nameOverlaySkipBtn');
 
     let current = 0, total = 0, personal = 0, personalSalawat = 0, cyclesThisSession = 0;
     let bubbleCount = 0;
@@ -815,17 +837,26 @@
     }
 
     let bubbleDragging = false, bubbleDragMoved = false, bubbleDragOffsetX = 0, bubbleDragOffsetY = 0;
+    let bubbleDragStartX = 0, bubbleDragStartY = 0;
+    const BUBBLE_DRAG_THRESHOLD = 8;
     inAppBubbleEl.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
       bubbleDragging = true;
       bubbleDragMoved = false;
+      bubbleDragStartX = e.clientX;
+      bubbleDragStartY = e.clientY;
       const rect = inAppBubbleEl.getBoundingClientRect();
       bubbleDragOffsetX = e.clientX - rect.left;
       bubbleDragOffsetY = e.clientY - rect.top;
       try { inAppBubbleEl.setPointerCapture(e.pointerId); } catch(err){}
     });
+    inAppBubbleEl.addEventListener('contextmenu', (e) => { e.preventDefault(); });
     inAppBubbleEl.addEventListener('pointermove', (e) => {
       if(!bubbleDragging) return;
-      bubbleDragMoved = true;
+      const movedDist = Math.hypot(e.clientX - bubbleDragStartX, e.clientY - bubbleDragStartY);
+      if(movedDist > BUBBLE_DRAG_THRESHOLD){
+        bubbleDragMoved = true;
+      }
       let x = e.clientX - bubbleDragOffsetX;
       let y = e.clientY - bubbleDragOffsetY;
       x = Math.max(0, Math.min(window.innerWidth - inAppBubbleEl.offsetWidth, x));
@@ -833,7 +864,8 @@
       inAppBubbleEl.style.left = x + 'px';
       inAppBubbleEl.style.top = y + 'px';
     });
-    inAppBubbleEl.addEventListener('pointerup', () => {
+    inAppBubbleEl.addEventListener('pointerup', (e) => {
+      e.preventDefault();
       bubbleDragging = false;
       if(!bubbleDragMoved){
         tap();
@@ -1050,6 +1082,40 @@
 
       checkNameUsedBeforeAndSave(name);
     }
+
+    function showNameOverlay(){
+      nameOverlayInput.value = '';
+      nameOverlay.classList.add('show');
+    }
+
+    function hideNameOverlay(){
+      nameOverlay.classList.remove('show');
+    }
+
+    function maybeShowNameOverlay(){
+      if(addToTotal && !currentUser){
+        showNameOverlay();
+      }
+    }
+
+    function saveNameFromOverlay(){
+      const name = sanitizeKey(nameOverlayInput.value);
+      if(!name){ showToast('❌ أدخل اسمك أولاً'); return; }
+      if(name.length > 20){ showToast('❌ الاسم طويل جداً'); return; }
+
+      if(!isFirebaseReady || !deviceId){
+        showToast('❌ يلزم الاتصال بالإنترنت للتحقق من الاسم قبل الحفظ');
+        return;
+      }
+
+      hideNameOverlay();
+      userNameInput.value = name;
+      checkNameUsedBeforeAndSave(name);
+    }
+
+    nameOverlaySaveBtn.addEventListener('click', saveNameFromOverlay);
+    nameOverlaySkipBtn.addEventListener('click', hideNameOverlay);
+    nameOverlayInput.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); saveNameFromOverlay(); } });
 
     function checkNameUsedBeforeAndSave(name){
       database.ref('nameOwners/' + name + '/deviceId').once('value', async (snap) => {
@@ -1314,7 +1380,7 @@
     }
 
     function tap(){
-      if(!currentUser){ showToast('❌ سجّل اسمك أولاً في الأسفل'); return; }
+      if(addToTotal && !currentUser){ showToast('❌ سجّل اسمك أولاً للمشاركة في عدّ الصلاة على النبي ﷺ المشترك'); return; }
       current++;
       bubbleCount++;
       saveBubbleCount();
@@ -1425,30 +1491,13 @@
       render();
     });
 
-    targetBtn.addEventListener('click', () => {
-      if(isInfinite){
-        activeTarget = 33;
-        isInfinite = false;
-        buildBeads(33);
-      } else if(activeTarget === 33){
-        activeTarget = 100;
-        buildBeads(100);
-      } else if(activeTarget === 100){
-        isInfinite = true;
-        activeTarget = Infinity;
-        buildBeads(33);
-      }
-      current = 0;
-      render();
-      showToast(isInfinite ? 'الهدف: ∞' : 'الهدف: ' + activeTarget);
-    });
-
     dhikrSelect.addEventListener('click', (e) => {
       const chip = e.target.closest('.dhikr-chip');
       if(!chip) return;
       [...dhikrSelect.children].forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       setDhikr(chip.dataset.dhikr, chip.dataset.target, chip.dataset.addTotal || 'false');
+      maybeShowNameOverlay();
     });
 
     manualAddBtn.addEventListener('click', addManualCount);
@@ -1472,6 +1521,7 @@
     loadTotalFromFirebase();
     if(currentUser) loadWeeklyManualTotal();
     render();
+    maybeShowNameOverlay();
 
     try {
       const saved = localStorage.getItem('offline_total');
@@ -1485,4 +1535,4 @@
   })();
 </script>
 </body>
-  </html>
+</html>

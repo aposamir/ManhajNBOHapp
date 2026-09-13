@@ -566,7 +566,6 @@
   <div class="cycles" id="cyclesLabel"></div>
 
   <div class="controls">
-    <button class="btn" id="targetBtn">تغيير الهدف</button>
     <button class="btn danger" id="resetBtn">🔄 تصفير</button>
   </div>
   <div class="controls">
@@ -674,7 +673,6 @@
     const personalResetBtn = document.getElementById('personalResetBtn');
     const cyclesLabel = document.getElementById('cyclesLabel');
     const resetBtn = document.getElementById('resetBtn');
-    const targetBtn = document.getElementById('targetBtn');
     const dhikrSelect = document.getElementById('dhikrSelect');
     const toast = document.getElementById('toast');
     const manualInput = document.getElementById('manualInput');
@@ -815,9 +813,13 @@
     }
 
     let bubbleDragging = false, bubbleDragMoved = false, bubbleDragOffsetX = 0, bubbleDragOffsetY = 0;
+    let bubbleDragStartX = 0, bubbleDragStartY = 0;
+    const BUBBLE_DRAG_THRESHOLD = 8;
     inAppBubbleEl.addEventListener('pointerdown', (e) => {
       bubbleDragging = true;
       bubbleDragMoved = false;
+      bubbleDragStartX = e.clientX;
+      bubbleDragStartY = e.clientY;
       const rect = inAppBubbleEl.getBoundingClientRect();
       bubbleDragOffsetX = e.clientX - rect.left;
       bubbleDragOffsetY = e.clientY - rect.top;
@@ -825,7 +827,10 @@
     });
     inAppBubbleEl.addEventListener('pointermove', (e) => {
       if(!bubbleDragging) return;
-      bubbleDragMoved = true;
+      const movedDist = Math.hypot(e.clientX - bubbleDragStartX, e.clientY - bubbleDragStartY);
+      if(movedDist > BUBBLE_DRAG_THRESHOLD){
+        bubbleDragMoved = true;
+      }
       let x = e.clientX - bubbleDragOffsetX;
       let y = e.clientY - bubbleDragOffsetY;
       x = Math.max(0, Math.min(window.innerWidth - inAppBubbleEl.offsetWidth, x));
@@ -1314,7 +1319,7 @@
     }
 
     function tap(){
-      if(!currentUser){ showToast('❌ سجّل اسمك أولاً في الأسفل'); return; }
+      if(addToTotal && !currentUser){ showToast('❌ سجّل اسمك أولاً للمشاركة في عدّ الصلاة على النبي ﷺ المشترك'); return; }
       current++;
       bubbleCount++;
       saveBubbleCount();
@@ -1425,24 +1430,6 @@
       render();
     });
 
-    targetBtn.addEventListener('click', () => {
-      if(isInfinite){
-        activeTarget = 33;
-        isInfinite = false;
-        buildBeads(33);
-      } else if(activeTarget === 33){
-        activeTarget = 100;
-        buildBeads(100);
-      } else if(activeTarget === 100){
-        isInfinite = true;
-        activeTarget = Infinity;
-        buildBeads(33);
-      }
-      current = 0;
-      render();
-      showToast(isInfinite ? 'الهدف: ∞' : 'الهدف: ' + activeTarget);
-    });
-
     dhikrSelect.addEventListener('click', (e) => {
       const chip = e.target.closest('.dhikr-chip');
       if(!chip) return;
@@ -1485,4 +1472,4 @@
   })();
 </script>
 </body>
-  </html> 
+</html>

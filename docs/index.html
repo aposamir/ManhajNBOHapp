@@ -32,7 +32,7 @@
     align-items:center;
     justify-content:space-between;
     overflow-x:hidden;
-    padding: 16px 10px 20px;
+    padding: 10px 10px 14px;
     position:relative;
   }
   body::before{
@@ -80,7 +80,7 @@
     justify-content:center;
   }
   .dhikr-select{
-    margin-top:12px;
+    margin-top:8px;
     display:flex;
     gap:6px;
     flex-wrap:wrap;
@@ -118,8 +118,8 @@
   .name-input-area{
     display:flex;
     gap:6px;
-    margin-top:12px;
-    flex-wrap:wrap;
+    margin-top:8px;
+    flex-wrap:nowrap;
     align-items:center;
     justify-content:center;
     width:100%;
@@ -128,10 +128,12 @@
     background:rgba(255,255,255,0.08);
     border:1px solid var(--line);
     border-radius:10px;
-    padding:6px 12px;
+    padding:6px 10px;
     color:var(--cream);
     font-size:0.85rem;
-    width:140px;
+    width:100px;
+    flex:0 0 auto;
+    min-width:0;
     text-align:center;
     -webkit-user-select:text;
     user-select:text;
@@ -141,16 +143,29 @@
     border-color:transparent;
   }
   .name-input-area .btn{
-    padding:6px 14px;
+    padding:6px 12px;
     font-size:0.75rem;
+    flex:0 0 auto;
+    white-space:nowrap;
   }
   .user-badge{
     background:rgba(201,161,90,0.15);
     border:1px solid var(--gold);
     border-radius:8px;
-    padding:2px 12px;
+    padding:2px 10px;
     font-size:0.7rem;
     color:var(--gold-soft);
+    flex:0 1 100px;
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  #nameOverlayInput{
+    width:80%;
+    max-width:260px;
+    font-size:1rem;
+    padding:10px 16px;
   }
   .counter-wrapper {
     position: relative;
@@ -159,7 +174,7 @@
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    margin-top: 10px;
+    margin-top: 4px;
     padding: 0 2px;
   }
   .counter-zone{
@@ -219,7 +234,7 @@
     color: var(--sage);
   }
   .tap-hint{
-    margin-top:4px;
+    margin-top:2px;
     font-size:0.65rem;
     color: rgba(243,236,221,0.45);
   }
@@ -276,7 +291,7 @@
   .controls{
     display:flex;
     gap:8px;
-    margin-top:10px;
+    margin-top:6px;
     flex-wrap:wrap;
     justify-content:center;
   }
@@ -298,11 +313,11 @@
   .total-card{
     width:100%;
     max-width:440px;
-    margin-top:10px;
+    margin-top:6px;
     background: rgba(255,255,255,0.035);
     border:1px solid var(--line);
     border-radius:14px;
-    padding:12px 16px;
+    padding:10px 16px;
     display:flex;
     align-items:center;
     justify-content:space-between;
@@ -573,10 +588,8 @@
   <div class="cycles" id="cyclesLabel"></div>
 
   <div class="controls">
-    <button class="btn danger" id="resetBtn">🔄 تصفير</button>
-  </div>
-  <div class="controls">
     <button class="btn gold" id="bubbleToggleBtn">📿 تفعيل الفقاعة</button>
+    <button class="btn danger" id="resetBtn">👆تصفير</button>
     <button class="btn danger" id="bubbleResetBtn">🔄 تصفير الفقاعة</button>
   </div>
 
@@ -650,12 +663,12 @@
 
 <div class="confirm-overlay" id="nameOverlay">
   <div class="confirm-box">
-    <p class="name-overlay-poem">شاركنا اسمك الكريم، فيه نرتقي،<br>فنحو المليار صلاة على الحبيب ﷺ نمضي</p>
+    <p class="name-overlay-poem">أهلاً وسهلاً بكم، أكرمنا باسمك الكريم، فبه سنرتقي،<br>فنحو المليار صلاة على الحبيب «صلاة ربي وسلامه عليه» نمضي.</p>
     <div class="name-input-area" style="margin-top:6px;">
       <input type="text" id="nameOverlayInput" placeholder="✏️ اسمك الكريم" maxlength="20">
     </div>
     <div class="confirm-actions" style="margin-top:14px;">
-      <button class="btn gold" id="nameOverlaySaveBtn">✅ حفظ والمتابعة</button>
+      <button class="btn gold" id="nameOverlaySaveBtn">✅ الحفظ والمتابعة</button>
       <button class="btn" id="nameOverlaySkipBtn">لاحقًا</button>
     </div>
   </div>
@@ -812,23 +825,25 @@
 
     function loadBubbleState(){
       try {
-        bubbleEnabled = localStorage.getItem(BUBBLE_STATE_KEY) === '1';
         bubbleCount = parseInt(localStorage.getItem(BUBBLE_COUNT_KEY), 10) || 0;
       } catch(e){
-        bubbleEnabled = false;
         bubbleCount = 0;
       }
+      bubbleEnabled = false;
       bubbleType = '';
-      if(bubbleEnabled){
-        reconcileBubbleMode();
-      } else {
-        hideAllBubbleUI();
-      }
+      hideAllBubbleUI();
       updateBubbleButtons();
     }
 
-    function showInAppBubbleUI(){
+    function updateBubbleCountDisplay(){
       inAppBubbleCountEl.textContent = bubbleCount;
+      const len = String(bubbleCount).length;
+      const size = len >= 6 ? '0.85rem' : len >= 5 ? '1.05rem' : '1.4rem';
+      inAppBubbleEl.style.fontSize = size;
+    }
+
+    function showInAppBubbleUI(){
+      updateBubbleCountDisplay();
       inAppBubbleEl.style.display = 'flex';
     }
 
@@ -998,7 +1013,7 @@
       cyclesLabel.textContent = cyclesThisSession > 0 ? ('أكملت ' + cyclesThisSession + ' دورة') : '';
       updateBeads();
       renderGoal();
-      if(bubbleEnabled){ inAppBubbleCountEl.textContent = bubbleCount; }
+      if(bubbleEnabled){ updateBubbleCountDisplay(); }
       if(bubbleEnabled && window.AndroidBridge && typeof AndroidBridge.updateCount === 'function'){
         try{ AndroidBridge.updateCount(bubbleCount); }catch(e){}
       }
@@ -1033,14 +1048,19 @@
       personalSalawatValue.textContent = personalSalawat.toLocaleString('en-US');
     }
 
+    function showUserNameBadge(name){
+      userNameDisplay.textContent = '👤 ' + name;
+      userNameDisplay.style.fontSize = name.length > 14 ? '0.58rem' : (name.length > 9 ? '0.64rem' : '0.7rem');
+      userNameDisplay.style.display = 'inline-block';
+    }
+
     function loadUserName(){
       try {
         const s = localStorage.getItem(USER_KEY);
         if(s){
           currentUser = s;
           userNameInput.value = s;
-          userNameDisplay.textContent = '👤 ' + s;
-          userNameDisplay.style.display = 'inline-block';
+          showUserNameBadge(s);
         }
       } catch(e){}
     }
@@ -1055,8 +1075,7 @@
     function finalizeSetUserName(name){
       currentUser = name;
       localStorage.setItem(USER_KEY, name);
-      userNameDisplay.textContent = '👤 ' + name;
-      userNameDisplay.style.display = 'inline-block';
+      showUserNameBadge(name);
       showToast('✅ تم حفظ الاسم: ' + name);
 
       if(isFirebaseReady){

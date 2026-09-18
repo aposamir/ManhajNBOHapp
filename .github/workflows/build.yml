@@ -26,10 +26,10 @@ jobs:
         run: |
           keytool -genkeypair -v \
             -keystore app/release.keystore \
-            -alias tasbeehapp \
+            -alias manhajapp \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
-            -dname "CN=TasbeehApp, OU=Dev, O=aposamir, L=City, ST=State, C=SA"
+            -dname "CN=ManhajApp, OU=Dev, O=aposamir, L=City, ST=State, C=SA"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -42,12 +42,12 @@ jobs:
       - name: Zip APK
         run: |
           cd app/build/outputs/apk/release/
-          zip TasbeehApp-release.zip *.apk
+          zip ManhajApp-release.zip *.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TasbeehApp
+          name: ManhajApp
           path: app/build/outputs/apk/release/
 
       - name: Publish GitHub Release with APK
@@ -55,8 +55,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "أحدث نسخة"
-          files: app/build/outputs/apk/release/TasbeehApp-release.zip
+          name: "أحدث نسخة - معهد منهاج النبوة"
+          files: app/build/outputs/apk/release/ManhajApp-release.zip
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

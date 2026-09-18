@@ -3,20 +3,20 @@ plugins {
 }
 
 android {
-    namespace 'com.aposamir.tasbeehapp'
+    namespace 'com.aposamir.manhajapp'
     compileSdk 34
 
     signingConfigs {
         release {
             storeFile file("release.keystore")
             storePassword "android"
-            keyAlias "tasbeehapp"
+            keyAlias "manhajapp"
             keyPassword "android"
         }
     }
 
     defaultConfig {
-        applicationId "com.aposamir.tasbeehapp"
+        applicationId "com.aposamir.manhajapp"
         minSdk 21
         targetSdk 34
         versionCode 1
@@ -37,7 +37,7 @@ android {
 
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
-            outputFileName = "TasbeehApp-${variant.buildType.name}.apk"
+            outputFileName = "ManhajApp-${variant.buildType.name}.apk"
         }
     }
 }

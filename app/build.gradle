@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace 'com.aposamir.manhajapp'
+    namespace 'com.aposamir.tasbeehapp'
     compileSdk 34
 
     signingConfigs {

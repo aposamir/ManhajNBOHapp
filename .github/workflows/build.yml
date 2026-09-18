@@ -39,6 +39,11 @@ jobs:
       - name: Build release APK
         run: gradle assembleRelease
 
+      - name: Zip APK
+        run: |
+          cd app/build/outputs/apk/release/
+          zip TasbeehApp-release.zip *.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -51,7 +56,7 @@ jobs:
         with:
           tag_name: latest
           name: "أحدث نسخة"
-          files: app/build/outputs/apk/release/*.apk
+          files: app/build/outputs/apk/release/TasbeehApp-release.zip
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

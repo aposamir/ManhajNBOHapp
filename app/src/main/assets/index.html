@@ -1313,7 +1313,7 @@
         setWeeklyManualTotalLocal(newTotal);
         weeklyManualTotal = newTotal;
         updateWeeklyLimitDisplay();
-        saveToOfflineQueue('manualAdd', val, currentUser);
+        saveToOfflineQueue('manualAdd', val, currentUser, getCurrentWeekKey());
         total += val;
         personal += val;
         personalSalawat += val;
@@ -1342,17 +1342,20 @@
       offlineQueue = [];
       try { localStorage.removeItem('offline_queue'); } catch(e) {}
 
-      const weekKey = getCurrentWeekKey();
+      const currentWeekKey = getCurrentWeekKey();
       queue.forEach(item => {
+        // Preserve the week in which an offline action actually happened.
+        // Legacy queue items fall back to the current week.
+        const itemWeekKey = item.weekKey || currentWeekKey;
         if (item.type === 'tap') {
           database.ref('totalCount').transaction((v) => (v || 0) + item.value);
           if (item.user) {
-            database.ref('leaderboard/' + weekKey + '/' + item.user).transaction((v) => (v || 0) + item.value);
+            database.ref('leaderboard/' + itemWeekKey + '/' + item.user).transaction((v) => (v || 0) + item.value);
             bumpAllTimeTotal(item.user, item.value, false);
           }
         }
         else if (item.type === 'manualAdd' && item.user) {
-          const ref = database.ref('weeklyManualAdditions/' + weekKey + '/' + item.user);
+          const ref = database.ref('weeklyManualAdditions/' + itemWeekKey + '/' + item.user);
           ref.transaction((currentVal) => {
             const newVal = (currentVal || 0) + item.value;
             if(newVal > WEEKLY_MANUAL_LIMIT) return undefined;
@@ -1360,7 +1363,7 @@
           }, (error, committed) => {
             if(committed){
               database.ref('totalCount').transaction((v) => (v || 0) + item.value);
-              database.ref('leaderboard/' + weekKey + '/' + item.user).transaction((v) => (v || 0) + item.value);
+              database.ref('leaderboard/' + itemWeekKey + '/' + item.user).transaction((v) => (v || 0) + item.value);
               bumpAllTimeTotal(item.user, item.value, true);
             }
           });
@@ -1370,8 +1373,8 @@
       if(queue.length > 0) showToast('✅ تمت مزامنة ' + queue.length + ' عملية معلقة');
     }
 
-    function saveToOfflineQueue(type, value, user){
-      offlineQueue.push({type, value, user});
+    function saveToOfflineQueue(type, value, user, weekKey = getCurrentWeekKey()){
+      offlineQueue.push({type, value, user, weekKey});
       try {
         localStorage.setItem('offline_queue', JSON.stringify(offlineQueue));
       } catch(e) {}
@@ -1415,7 +1418,7 @@
           bumpAllTimeTotal(currentUser, amount, false);
         }
       } else {
-        saveToOfflineQueue('tap', amount, currentUser);
+        saveToOfflineQueue('tap', amount, currentUser, weekKey);
         total += amount;
         try { localStorage.setItem('offline_total', String(total)); } catch(e) {}
         render();

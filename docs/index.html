@@ -9,10 +9,10 @@
 <meta property="og:site_name" content="مسبحة معهد منهاج النبوة">
 <meta property="og:title" content="مسبحة معهد منهاج النبوة">
 <meta property="og:description" content="مسبحة رقمية مشتركة لأذكار وصلاة على النبي ﷺ مع عدّاد جماعي وقائمة أوائل أسبوعية">
-<meta property="og:url" content="https://aposamir.github.io/ManhajNBOHapp/">
+<meta property="og:url" content="https://aposamir.github.io/mnhj-nbwa-tasbih/">
 <meta property="og:locale" content="ar_AR">
 <meta name="twitter:card" content="summary">
-<link rel="canonical" href="https://aposamir.github.io/ManhajNBOHapp/">
+<link rel="canonical" href="https://aposamir.github.io/mnhj-nbwa-tasbih/">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0E2E2C">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -1297,26 +1297,6 @@
       return false;
     }
 
-    function hasPendingWorkForCurrentUser(){
-      if(!currentUser) return false;
-
-      const queuedForCurrentUser = offlineQueue.some(item =>
-        item && item.user === currentUser && Number(item.value) > 0
-      );
-      if(queuedForCurrentUser) return true;
-
-      if(window.AndroidBridge
-          && typeof AndroidBridge.getPendingBubbleTapCount === 'function'
-          && typeof AndroidBridge.getPendingBubbleUser === 'function'){
-        try {
-          const pendingCount = Number(AndroidBridge.getPendingBubbleTapCount()) || 0;
-          const pendingUser = String(AndroidBridge.getPendingBubbleUser() || '');
-          if(pendingCount > 0 && pendingUser === currentUser) return true;
-        } catch(e) {}
-      }
-      return false;
-    }
-
     async function finalizeSetUserName(name){
       if(!isFirebaseReady || !deviceId){
         showToast('❌ يلزم الاتصال بالإنترنت لحفظ الاسم');
@@ -1864,6 +1844,29 @@
       return true;
     }
 
+    let drainingPending = false;
+    async function drainPendingBubbleTaps(){
+      if(drainingPending || !currentUser) return;
+      if(!window.AndroidBridge || typeof AndroidBridge.takePendingBubbleTaps !== 'function') return;
+      try {
+        if(String(AndroidBridge.getPendingBubbleUser() || '') !== currentUser) return;
+        if((Number(AndroidBridge.getPendingBubbleTapCount()) || 0) <= 0) return;
+      } catch(e) { return; }
+      drainingPending = true;
+      let n = 0;
+      try {
+        n = Number(AndroidBridge.takePendingBubbleTaps()) || 0;
+        if(n > 0){
+          const ok = await hitTotal(n);
+          if(ok){ showToast('✅ أُضيفت ' + n + ' ضغطة من الفقاعة إلى العدّاد'); }
+          else { AndroidBridge.restorePendingBubbleTaps(n); }
+        }
+      } catch(e) {
+        if(n > 0){ try { AndroidBridge.restorePendingBubbleTaps(n); } catch(_) {} }
+      }
+      drainingPending = false;
+    }
+
     async function nativeBubbleTapAsync(){
       if(addToTotal && !currentUser) return false;
 
@@ -1899,6 +1902,9 @@
     function setDhikr(dhikr, target, addTotal){
       activeDhikr = dhikr;
       addToTotal = (addTotal === 'true');
+      if(window.AndroidBridge && typeof AndroidBridge.setSharedMode === 'function'){
+        try { AndroidBridge.setSharedMode(addToTotal); } catch(e) {}
+      }
       isInfinite = (target === '∞');
       if(isInfinite){
         activeTarget = Infinity;
@@ -1961,6 +1967,7 @@
         connectionStatus.style.color = '#81C784';
         connectionStatus.style.background = 'rgba(76,175,80,0.15)';
         syncOfflineQueue();
+        drainPendingBubbleTaps();
         loadTotalFromFirebase();
         loadLeaderboardFromFirebase();
         if(currentUser) {
@@ -2036,6 +2043,9 @@
     }
     loadPersonal();
     loadUserName();
+    if(window.AndroidBridge && typeof AndroidBridge.setSharedMode === 'function'){
+      try { AndroidBridge.setSharedMode(!!addToTotal); } catch(e) {}
+    }
     loadBubbleState();
     loadTotalFromFirebase();
     if(currentUser) loadWeeklyManualTotal();
@@ -2054,6 +2064,10 @@
     // Volume-key/in-app taps use normal counting. Native overlay taps have
     // already incremented bubble_count in FloatingService, so replay them
     // without incrementing the bubble display a second time.
+    window.drainPendingBubbleTaps = drainPendingBubbleTaps;
+    document.addEventListener('visibilitychange', () => { if(!document.hidden) drainPendingBubbleTaps(); });
+    window.addEventListener('focus', drainPendingBubbleTaps);
+    setTimeout(drainPendingBubbleTaps, 800);
     window.androidTap = () => tap(false);
     window.androidBubbleTap = () => tap(true);
     window.androidBubbleTapAsync = nativeBubbleTapAsync;

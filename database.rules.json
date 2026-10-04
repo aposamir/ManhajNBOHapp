@@ -2,12 +2,10 @@
   "rules": {
     ".read": false,
     ".write": false,
-
     "totalCount": {
       ".read": true,
       ".write": "auth != null && auth.token.admin === true || (newData.isNumber() && newData.val() >= (data.exists() ? data.val() : 0) && newData.val() <= (data.exists() ? data.val() : 0) + 99999)"
     },
-
     "leaderboard": {
       "$week": {
         ".read": true,
@@ -18,18 +16,16 @@
         }
       }
     },
-
     "weeklyManualAdditions": {
       "$week": {
         ".read": true,
         ".validate": "$week.matches(/^week_[0-9]{1,2}_20[0-9]{2}$/)",
         "$user": {
           ".validate": "$user.length >= 1 && $user.length <= 30",
-          ".write": "auth != null && auth.token.admin === true || (newData.isNumber() && newData.val() >= (data.exists() ? data.val() : 0) && newData.val() <= (data.exists() ? data.val() : 0) + 99999)"
+          ".write": "auth != null && auth.token.admin === true || (newData.isNumber() && newData.val() >= (data.exists() ? data.val() : 0) && newData.val() <= 99999 && newData.val() <= (data.exists() ? data.val() : 0) + 99999)"
         }
       }
     },
-
     "allTimeTotals": {
       "$user": {
         ".read": true,
@@ -37,7 +33,6 @@
         ".write": "auth != null && auth.token.admin === true || (newData.isNumber() && newData.val() >= (data.exists() ? data.val() : 0) && newData.val() <= (data.exists() ? data.val() : 0) + 99999)"
       }
     },
-
     "allTimeManualTotals": {
       "$user": {
         ".read": true,
@@ -45,7 +40,6 @@
         ".write": "auth != null && auth.token.admin === true || (newData.isNumber() && newData.val() >= (data.exists() ? data.val() : 0) && newData.val() <= (data.exists() ? data.val() : 0) + 99999)"
       }
     },
-
     "nameOwners": {
       "$name": {
         ".read": true,
@@ -55,10 +49,19 @@
           ".validate": "newData.isString() && newData.val().length <= 64"
         },
         "lastActive": {
-          ".write": true,
+          ".write": "auth != null && auth.token.admin === true || (newData.isNumber() && data.parent().child('deviceId').exists())",
           ".validate": "newData.isNumber()"
         },
-        "$other": { ".validate": false }
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+    "similarityExceptions": {
+      "$groupKey": {
+        ".read": true,
+        ".write": "auth != null && auth.token.admin === true",
+        ".validate": "newData.isBoolean()"
       }
     }
   }

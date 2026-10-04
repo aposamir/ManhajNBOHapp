@@ -4,7 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>مسبحة معهد منهاج النبوة</title>
+<meta name="description" content="مسبحة رقمية مشتركة لأذكار وصلاة على النبي ﷺ مع عدّاد جماعي وقائمة أوائل أسبوعية">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="مسبحة معهد منهاج النبوة">
+<meta property="og:title" content="مسبحة معهد منهاج النبوة">
+<meta property="og:description" content="مسبحة رقمية مشتركة لأذكار وصلاة على النبي ﷺ مع عدّاد جماعي وقائمة أوائل أسبوعية">
+<meta property="og:url" content="https://aposamir.github.io/ManhajNBOHapp/">
+<meta property="og:locale" content="ar_AR">
+<meta name="twitter:card" content="summary">
+<link rel="canonical" href="https://aposamir.github.io/ManhajNBOHapp/">
+<link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0E2E2C">
+<link rel="apple-touch-icon" href="icon-180.png">
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <style>
@@ -568,6 +579,7 @@
   ::-webkit-scrollbar{ width:3px; }
   ::-webkit-scrollbar-track{ background:transparent; }
   ::-webkit-scrollbar-thumb{ background:var(--gold); border-radius:9px; }
+  .tap-btn, .btn, .dhikr-chip, .total-reset{ touch-action: manipulation; }
 </style>
 </head>
 <body>
@@ -712,8 +724,27 @@
     measurementId: "G-P7ZWT4RHP7"
   };
 
-  firebase.initializeApp(firebaseConfig);
-  const database = firebase.database();
+  // لو لم تُحمَّل مكتبة Firebase (شبكة ضعيفة، أو حجب داخل متصفح فيسبوك)
+  // يبقى التطبيق شغّالاً بوضع غير متصل بدل أن يتوقف السكربت كاملاً.
+  let database;
+  try {
+    if (typeof firebase === 'undefined') throw new Error('Firebase SDK not loaded');
+    firebase.initializeApp(firebaseConfig);
+    database = firebase.database();
+  } catch (err) {
+    const makeNoopRef = () => {
+      const r = {
+        on(){ return r; },
+        off(){ return r; },
+        once(){ return Promise.resolve({ val(){ return null; } }); },
+        set(){ return Promise.reject(new Error('offline')); },
+        update(){ return Promise.reject(new Error('offline')); },
+        transaction(){ return Promise.reject(new Error('offline')); }
+      };
+      return r;
+    };
+    database = { ref: makeNoopRef };
+  }
 
   (function(){
     const tapBtn = document.getElementById('tapBtn');
@@ -772,6 +803,7 @@
     const DEVICE_ID_KEY = 'tasbeeh_device_id';
     const BUBBLE_STATE_KEY = 'tasbeeh_bubble_enabled';
     const BUBBLE_COUNT_KEY = 'tasbeeh_bubble_count';
+    const SESSION_STATE_KEY = 'tasbeeh_session_state_v1';
     let isSyncingQueue = false;
     let currentWeeklyRef = null;
     let totalRef = null;
@@ -780,8 +812,9 @@
 
     let previousScores = {};
     let isFirstLeadLoad = true;
-    // Previous display order, used to break ties: whoever reached a score
-    // first keeps the higher rank until someone exceeds it by at least 1.
+    // Previous display order keeps equal scores visually stable during
+    // the current session. Firebase stores totals, not "time reached", so
+    // previously unseen ties use a deterministic Arabic name order.
     let lastRankOrder = [];
     let activeUsersTimers = {};
 
@@ -792,6 +825,7 @@
     const WEEKLY_MANUAL_LIMIT = 99999;
     let offlineQueue = [];
     let weeklyManualTotal = 0;
+    let isManualAddPending = false;
 
     // يهرّب أي نص يأتي من قاعدة بيانات مشتركة (اسم مستخدم آخر مثلاً) قبل
     // إدراجه بـ innerHTML، لمنع XSS لو احتوى الاسم وسوم HTML.
@@ -873,13 +907,33 @@
     function loadBubbleState(){
       try {
         bubbleCount = parseInt(localStorage.getItem(BUBBLE_COUNT_KEY), 10) || 0;
+        bubbleEnabled = localStorage.getItem(BUBBLE_STATE_KEY) === '1';
       } catch(e){
         bubbleCount = 0;
+        bubbleEnabled = false;
       }
-      bubbleEnabled = false;
+
+      // Android's SharedPreferences is authoritative for the native bubble
+      // because it keeps counting while the WebView is closed. Reading it here
+      // only synchronizes the display; it does NOT call tap() or alter totals.
+      if(window.AndroidBridge && typeof AndroidBridge.getNativeBubbleCount === 'function'){
+        try {
+          const nativeCount = Number(AndroidBridge.getNativeBubbleCount());
+          if(Number.isFinite(nativeCount) && nativeCount >= 0){
+            bubbleCount = nativeCount;
+            saveBubbleCount();
+          }
+        } catch(e) {}
+      }
+
       bubbleType = '';
-      hideAllBubbleUI();
+      // Do not call hideAllBubbleUI() here: on Android that would stop an
+      // already-running overlay service while the page is merely restoring.
+      hideInAppBubbleUI();
       updateBubbleButtons();
+      if(bubbleEnabled){
+        reconcileBubbleMode();
+      }
     }
 
     function updateBubbleCountDisplay(){
@@ -926,6 +980,7 @@
       inAppBubbleEl.style.left = x + 'px';
       inAppBubbleEl.style.top = y + 'px';
     });
+    inAppBubbleEl.addEventListener('pointercancel', () => { bubbleDragging = false; });
     inAppBubbleEl.addEventListener('pointerup', (e) => {
       e.preventDefault();
       bubbleDragging = false;
@@ -942,10 +997,13 @@
       const canUseNative = hasPermission && window.AndroidBridge && typeof AndroidBridge.showOverlayBubble === 'function';
       const targetType = canUseNative ? 'native' : 'inapp';
 
-      hideAllBubbleUI();
+      // Do not stop the native service just to start it again: that stop/start
+      // race made Android kill the app (startForegroundService without startForeground).
       if(targetType === 'native'){
+        hideInAppBubbleUI();
         AndroidBridge.showOverlayBubble(NATIVE_BUBBLE_SCALE);
       } else {
+        hideAllBubbleUI();
         showInAppBubbleUI();
       }
       bubbleType = targetType;
@@ -987,25 +1045,46 @@
       if(bubbleEnabled) reconcileBubbleMode();
     });
 
+    const PROJECT_TIME_ZONE = 'Asia/Damascus';
+
     function serverNow(){
       return new Date(Date.now() + serverTimeOffsetMs);
     }
 
+    function getDamascusDateParts(date = serverNow()){
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: PROJECT_TIME_ZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(date);
+      const out = {};
+      parts.forEach(part => {
+        if(part.type !== 'literal') out[part.type] = Number(part.value);
+      });
+      return { year: out.year, month: out.month, day: out.day };
+    }
+
+    // Calendar-only UTC dates are used internally so week arithmetic is immune
+    // to the phone's timezone and daylight-saving transitions.
+    function calendarDateUtc(year, month, day){
+      return new Date(Date.UTC(year, month - 1, day));
+    }
+
     function getWeekStartSaturday(date = serverNow()){
-      const d = new Date(date);
-      d.setHours(0, 0, 0, 0);
-      const day = d.getDay();
-      const diff = (day + 1) % 7;
-      d.setDate(d.getDate() - diff);
+      const p = getDamascusDateParts(date);
+      const d = calendarDateUtc(p.year, p.month, p.day);
+      const diff = (d.getUTCDay() + 1) % 7;
+      d.setUTCDate(d.getUTCDate() - diff);
       return d;
     }
 
-    function getWeekNumber(){
-      const satStart = getWeekStartSaturday();
-      const year = satStart.getFullYear();
-      const jan1 = new Date(year, 0, 1);
-      const diffToFirstSaturday = (6 - jan1.getDay() + 7) % 7;
-      const firstSaturday = new Date(year, 0, 1 + diffToFirstSaturday);
+    function getWeekNumber(date = serverNow()){
+      const satStart = getWeekStartSaturday(date);
+      const year = satStart.getUTCFullYear();
+      const jan1 = calendarDateUtc(year, 1, 1);
+      const diffToFirstSaturday = (6 - jan1.getUTCDay() + 7) % 7;
+      const firstSaturday = calendarDateUtc(year, 1, 1 + diffToFirstSaturday);
       const diffDays = Math.round((satStart - firstSaturday) / 86400000);
       let weekNum = Math.floor(diffDays / 7) + 1;
       if(weekNum < 1) weekNum = 1;
@@ -1014,11 +1093,46 @@
 
     function getCurrentWeekKey(){
       const satStart = getWeekStartSaturday();
-      return 'week_' + getWeekNumber() + '_' + satStart.getFullYear();
+      return 'week_' + getWeekNumber() + '_' + satStart.getUTCFullYear();
     }
 
+    // Manual/external additions always belong to the same week currently
+    // shown in the app. This avoids Saturday being written to the previous week.
+    function getManualAdditionWeekKey(){
+      return getCurrentWeekKey();
+    }
+
+    // Keep week-scoped Firebase listeners in sync when Saturday starts.
+    // Without this, an app left open across midnight keeps listening to
+    // the previous week's leaderboard until the page is reloaded.
+    let activeWeekKey = '';
+
+    function refreshWeekIfChanged(force = false){
+      const newWeekKey = getCurrentWeekKey();
+      if(!force && activeWeekKey === newWeekKey) return;
+
+      activeWeekKey = newWeekKey;
+      previousScores = {};
+      lastRankOrder = [];
+      isFirstLeadLoad = true;
+
+      if(currentUser) loadWeeklyManualTotal();
+      if(isFirebaseReady) loadLeaderboardFromFirebase();
+    }
+
+    setInterval(() => refreshWeekIfChanged(false), 60000);
+    document.addEventListener('visibilitychange', () => {
+      if(document.visibilityState === 'visible') refreshWeekIfChanged(false);
+    });
+    window.addEventListener('focus', () => refreshWeekIfChanged(false));
+
     function formatDateAr(d){
-      return d.toLocaleDateString('ar-EG', { day:'2-digit', month:'2-digit', year:'numeric' });
+      return new Intl.DateTimeFormat('ar-EG', {
+        timeZone: 'UTC',
+        day:'2-digit',
+        month:'2-digit',
+        year:'numeric'
+      }).format(d);
     }
 
     function buildBeads(n){
@@ -1066,6 +1180,45 @@
       }
     }
 
+    function saveSessionState(){
+      try {
+        localStorage.setItem(SESSION_STATE_KEY, JSON.stringify({
+          current,
+          cyclesThisSession,
+          activeDhikr,
+          activeTarget: isInfinite ? '∞' : activeTarget,
+          addToTotal
+        }));
+      } catch(e) {}
+    }
+
+    function loadSessionState(){
+      try {
+        const raw = localStorage.getItem(SESSION_STATE_KEY);
+        if(!raw) return false;
+        const state = JSON.parse(raw);
+        if(!state || typeof state.activeDhikr !== 'string') return false;
+
+        activeDhikr = state.activeDhikr;
+        addToTotal = state.addToTotal !== false;
+        isInfinite = state.activeTarget === '∞';
+        activeTarget = isInfinite ? Infinity : Math.max(1, parseInt(state.activeTarget, 10) || 33);
+        current = Math.max(0, parseInt(state.current, 10) || 0);
+        if(!isInfinite && current >= activeTarget) current = current % activeTarget;
+        cyclesThisSession = Math.max(0, parseInt(state.cyclesThisSession, 10) || 0);
+        buildBeads(isInfinite ? 33 : activeTarget);
+
+        [...dhikrSelect.children].forEach(chip => {
+          const sameDhikr = chip.dataset.dhikr === activeDhikr;
+          const sameTarget = String(chip.dataset.target) === (isInfinite ? '∞' : String(activeTarget));
+          chip.classList.toggle('active', sameDhikr && sameTarget);
+        });
+        return true;
+      } catch(e) {
+        return false;
+      }
+    }
+
     function vibrate(pattern){
       if(navigator.vibrate){
         try{ navigator.vibrate(pattern); }catch(e){}
@@ -1105,6 +1258,9 @@
         const s = localStorage.getItem(USER_KEY);
         if(s){
           currentUser = s;
+          if(window.AndroidBridge && typeof AndroidBridge.setCurrentUserName === 'function'){
+            try { AndroidBridge.setCurrentUserName(s); } catch(e) {}
+          }
           userNameInput.value = s;
           showUserNameBadge(s);
         }
@@ -1121,18 +1277,80 @@
         .trim();
     }
 
-    function finalizeSetUserName(name){
-      currentUser = name;
-      localStorage.setItem(USER_KEY, name);
-      showUserNameBadge(name);
-      showToast('✅ تم حفظ الاسم: ' + name);
+    function hasPendingWorkForCurrentUser(){
+      if(!currentUser) return false;
 
-      if(isFirebaseReady){
-        database.ref('nameOwners/' + name + '/deviceId').set(deviceId)
-          .catch(() => { showToast('⚠️ تعذّر تسجيل الاسم في القائمة المشتركة'); });
-        database.ref('nameOwners/' + name + '/lastActive').set(Date.now());
+      const queuedForCurrentUser = offlineQueue.some(item =>
+        item && item.user === currentUser && Number(item.value) > 0
+      );
+      if(queuedForCurrentUser) return true;
+
+      if(window.AndroidBridge
+          && typeof AndroidBridge.getPendingBubbleTapCount === 'function'
+          && typeof AndroidBridge.getPendingBubbleUser === 'function'){
+        try {
+          const pendingCount = Number(AndroidBridge.getPendingBubbleTapCount()) || 0;
+          const pendingUser = String(AndroidBridge.getPendingBubbleUser() || '');
+          if(pendingCount > 0 && pendingUser === currentUser) return true;
+        } catch(e) {}
+      }
+      return false;
+    }
+
+    function hasPendingWorkForCurrentUser(){
+      if(!currentUser) return false;
+
+      const queuedForCurrentUser = offlineQueue.some(item =>
+        item && item.user === currentUser && Number(item.value) > 0
+      );
+      if(queuedForCurrentUser) return true;
+
+      if(window.AndroidBridge
+          && typeof AndroidBridge.getPendingBubbleTapCount === 'function'
+          && typeof AndroidBridge.getPendingBubbleUser === 'function'){
+        try {
+          const pendingCount = Number(AndroidBridge.getPendingBubbleTapCount()) || 0;
+          const pendingUser = String(AndroidBridge.getPendingBubbleUser() || '');
+          if(pendingCount > 0 && pendingUser === currentUser) return true;
+        } catch(e) {}
+      }
+      return false;
+    }
+
+    async function finalizeSetUserName(name){
+      if(!isFirebaseReady || !deviceId){
+        showToast('❌ يلزم الاتصال بالإنترنت لحفظ الاسم');
+        return;
       }
 
+      if(currentUser && name !== currentUser && hasPendingWorkForCurrentUser()){
+        showToast('⚠️ توجد عمليات معلّقة باسم ' + currentUser + '. انتظر مزامنتها قبل تغيير الاسم حتى لا يبقى الرصيد عالقاً.', 6500);
+        syncOfflineQueue();
+        return;
+      }
+      try {
+        // Do not claim success locally unless Firebase accepted the ownership write.
+        await database.ref('nameOwners/' + name + '/deviceId').set(deviceId);
+        await database.ref('nameOwners/' + name + '/lastActive').set(firebase.database.ServerValue.TIMESTAMP);
+      } catch(e) {
+        showToast('❌ لم يتم اعتماد الاسم على هذا الجهاز. استخدم الاسم من جهازه الأصلي أو اسماً مختلفاً', 5000);
+        return;
+      }
+
+      // Detach user-scoped listeners before switching identity so a late
+      // callback from the previous name cannot briefly overwrite the new UI.
+      if(currentWeeklyRef){ currentWeeklyRef.off(); currentWeeklyRef = null; }
+      if(allTimeTotalRef){ allTimeTotalRef.off(); allTimeTotalRef = null; }
+
+      currentUser = name;
+      if(window.AndroidBridge && typeof AndroidBridge.setCurrentUserName === 'function'){
+        try { AndroidBridge.setCurrentUserName(name); } catch(e) {}
+      }
+      weeklyManualTotal = 0;
+      allTimeTotalValue.textContent = '0';
+      try { localStorage.setItem(USER_KEY, name); } catch(e) {}
+      showUserNameBadge(name);
+      showToast('✅ تم حفظ الاسم: ' + name);
       loadWeeklyManualTotal();
       loadLeaderboardFromFirebase();
       loadAllTimeTotal();
@@ -1143,6 +1361,11 @@
       const name = sanitizeKey(userNameInput.value);
       if(!name){ showToast('❌ أدخل اسمك أولاً'); return; }
       if(name.length > 30){ showToast('❌ الاسم طويل جداً'); return; }
+      if(currentUser && name !== currentUser && hasPendingWorkForCurrentUser()){
+        userNameInput.value = currentUser;
+        showToast('⚠️ توجد ضغطات أو إضافات معلقة للاسم الحالي. انتظر مزامنتها قبل تغيير الاسم', 6000);
+        return;
+      }
 
       if(!isFirebaseReady || !deviceId){
         showToast('❌ يلزم الاتصال بالإنترنت للتحقق من الاسم قبل الحفظ');
@@ -1177,6 +1400,11 @@
         return;
       }
 
+      if(currentUser && name !== currentUser && hasPendingWorkForCurrentUser()){
+        nameOverlayInput.value = currentUser;
+        showToast('⚠️ توجد ضغطات أو إضافات معلقة للاسم الحالي. انتظر مزامنتها قبل تغيير الاسم', 6000);
+        return;
+      }
       hideNameOverlay();
       userNameInput.value = name;
       checkNameUsedBeforeAndSave(name);
@@ -1192,15 +1420,8 @@
         const usedByAnotherDevice = savedDevice && savedDevice !== deviceId;
 
         if(usedByAnotherDevice){
-          const ok = await customConfirm(
-            '⚠️ الاسم "' + name + '" محفوظ مسبقاً من جهاز آخر.\n\n' +
-            'إن كنت متأكداً أنه أنت، اضغط "موافق" للمتابعة.\n' +
-            'إن لم تكن متأكداً، اضغط "إلغاء" وعدّل الاسم (مثلاً أضف رقماً).'
-          );
-          if(!ok){
-            showToast('❌ تم الإلغاء، جرّب تعديل الاسم');
-            return;
-          }
+          showToast('⚠️ هذا الاسم مرتبط بجهاز آخر. استخدم اسماً مختلفاً لتجنب دمج أرصدة شخصين', 5500);
+          return;
         }
 
         finalizeSetUserName(name);
@@ -1211,7 +1432,7 @@
 
     function loadWeeklyManualTotal(){
       if(!currentUser) return;
-      const weekKey = getCurrentWeekKey();
+      const weekKey = getManualAdditionWeekKey();
 
       if(currentWeeklyRef) {
         currentWeeklyRef.off();
@@ -1221,7 +1442,7 @@
         currentWeeklyRef = database.ref('weeklyManualAdditions/' + weekKey + '/' + currentUser);
         currentWeeklyRef.on('value', (snap) => {
           weeklyManualTotal = snap.val() || 0;
-          setWeeklyManualTotalLocal(weeklyManualTotal);
+          setWeeklyManualTotalLocal(weeklyManualTotal, weekKey);
           updateWeeklyLimitDisplay();
         });
       } else {
@@ -1248,14 +1469,20 @@
       });
     }
 
-    // isManual: true لو المصدر إضافة يدوية (يُسجَّل أيضاً بـ allTimeManualTotals
-    // كنظير لعلاقة leaderboard/weeklyManualAdditions الأسبوعية)، false لو ضغط مباشر.
-    function bumpAllTimeTotal(user, amount, isManual){
-      if(!isFirebaseReady || !user) return;
-      database.ref('allTimeTotals/' + user).transaction((v) => (v || 0) + amount);
+    // Write every counter affected by one action in ONE atomic Firebase update.
+    // Either all counters are updated, or none are. This prevents partial totals.
+    function atomicCountUpdate(user, amount, weekKey, isManual){
+      if(!isFirebaseReady || !user) return Promise.reject(new Error('offline'));
+      const inc = firebase.database.ServerValue.increment(amount);
+      const updates = {};
+      updates['totalCount'] = inc;
+      updates['leaderboard/' + weekKey + '/' + user] = inc;
+      updates['allTimeTotals/' + user] = inc;
       if(isManual){
-        database.ref('allTimeManualTotals/' + user).transaction((v) => (v || 0) + amount);
+        updates['weeklyManualAdditions/' + weekKey + '/' + user] = inc;
+        updates['allTimeManualTotals/' + user] = inc;
       }
+      return database.ref().update(updates);
     }
 
     function updateWeeklyLimitDisplay(){
@@ -1263,57 +1490,97 @@
       weeklyLimitInfo.textContent = 'المتبقي لهذا الأسبوع: ' + remaining.toLocaleString('en-US');
     }
 
-    function getWeeklyManualTotalFromLocal(){
+    function getWeeklyManualTotalFromLocal(weekKey = getManualAdditionWeekKey()){
       try {
-        const key = 'weekly_manual_' + getCurrentWeekKey() + '_' + currentUser;
+        const key = 'weekly_manual_' + weekKey + '_' + currentUser;
         return parseInt(localStorage.getItem(key), 10) || 0;
       } catch(e){ return 0; }
     }
 
-    function setWeeklyManualTotalLocal(value){
+    function setWeeklyManualTotalLocal(value, weekKey = getManualAdditionWeekKey()){
       try {
-        const key = 'weekly_manual_' + getCurrentWeekKey() + '_' + currentUser;
+        const key = 'weekly_manual_' + weekKey + '_' + currentUser;
         localStorage.setItem(key, String(value));
       } catch(e) {}
     }
 
     function addManualCount(){
-      if(!currentUser){ showToast('❌ سجّل اسمك أولاً'); return; }
+      if(isManualAddPending) return;
+      isManualAddPending = true;
+      manualAddBtn.disabled = true;
+
+      const finishManualAdd = () => {
+        isManualAddPending = false;
+        manualAddBtn.disabled = false;
+      };
+
+      if(!currentUser){ showToast('❌ سجّل اسمك أولاً'); finishManualAdd(); return; }
       const val = parseInt(manualInput.value, 10);
-      if(isNaN(val) || val <= 0){ showToast('❌ أدخل عدداً صحيحاً'); manualInput.value = ''; return; }
-      if(val > 99999){ showToast('❌ الحد الأقصى 99,999 في المرة'); manualInput.value = ''; return; }
+      if(isNaN(val) || val <= 0){ showToast('❌ أدخل عدداً صحيحاً'); manualInput.value = ''; finishManualAdd(); return; }
+      if(val > 99999){ showToast('❌ الحد الأقصى 99,999 في المرة'); manualInput.value = ''; finishManualAdd(); return; }
 
       let currentTotal = weeklyManualTotal;
       if(currentTotal + val > WEEKLY_MANUAL_LIMIT){
         const remaining = Math.max(0, WEEKLY_MANUAL_LIMIT - currentTotal);
         showToast('❌ تجاوزت الحد الأسبوعي، المتبقي: ' + remaining.toLocaleString('en-US'));
         manualInput.value = '';
+        finishManualAdd();
         return;
       }
 
       if(isFirebaseReady){
-        const weekKey = getCurrentWeekKey();
-        const ref = database.ref('weeklyManualAdditions/' + weekKey + '/' + currentUser);
-        ref.transaction((v) => (v || 0) + val, (error, committed) => {
-          if(error) { showToast('❌ خطأ في الاتصال'); return; }
-          if(committed){
-            database.ref('totalCount').transaction((v) => (v || 0) + val);
-            database.ref('leaderboard/' + weekKey + '/' + currentUser).transaction((v) => (v || 0) + val);
-            bumpAllTimeTotal(currentUser, val, true);
+        const weekKey = getManualAdditionWeekKey();
+        const manualRef = database.ref('weeklyManualAdditions/' + weekKey + '/' + currentUser);
+
+        // Re-read the authoritative weekly manual total immediately before the
+        // atomic write. This catches additions made on another device that the
+        // live listener/local cache may not have observed yet.
+        manualRef.once('value').then((snap) => {
+          const serverManualTotal = Number(snap.val()) || 0;
+          weeklyManualTotal = serverManualTotal;
+          setWeeklyManualTotalLocal(serverManualTotal, weekKey);
+          updateWeeklyLimitDisplay();
+
+          if(serverManualTotal + val > WEEKLY_MANUAL_LIMIT){
+            const remaining = Math.max(0, WEEKLY_MANUAL_LIMIT - serverManualTotal);
+            showToast('❌ تجاوزت الحد الأسبوعي، المتبقي: ' + remaining.toLocaleString('en-US'));
+            manualInput.value = '';
+            return false;
+          }
+
+          return atomicCountUpdate(currentUser, val, weekKey, true).then(() => {
             personal += val;
             personalSalawat += val;
             savePersonal();
             render();
             showToast('✅ تمت إضافة ' + val.toLocaleString('en-US'));
             manualInput.value = '';
+            return true;
+          });
+        }).catch((err) => {
+          const code = String((err && err.code) || '').toLowerCase();
+          if(code.includes('permission')){
+            showToast('❌ رفضت قاعدة البيانات الإضافة ولم يتغير الرصيد', 4500);
+          } else {
+            // A network failure can happen after Firebase has already accepted
+            // the atomic update. Do not tell the user to repeat the addition:
+            // refresh the authoritative counters when connectivity returns.
+            showToast('⚠️ تعذر تأكيد نتيجة الإضافة. لا تعِدها الآن؛ سيتم التحقق من الرصيد تلقائياً عند عودة الاتصال', 6500);
+            setTimeout(() => {
+              if(isFirebaseReady){
+                loadWeeklyManualTotal();
+                loadAllTimeTotal();
+                loadTotalFromFirebase();
+              }
+            }, 2500);
           }
-        });
+        }).finally(finishManualAdd);
       } else {
         const newTotal = currentTotal + val;
         setWeeklyManualTotalLocal(newTotal);
         weeklyManualTotal = newTotal;
         updateWeeklyLimitDisplay();
-        saveToOfflineQueue('manualAdd', val, currentUser, getCurrentWeekKey());
+        saveToOfflineQueue('manualAdd', val, currentUser, getManualAdditionWeekKey());
         total += val;
         personal += val;
         personalSalawat += val;
@@ -1322,6 +1589,7 @@
         render();
         showToast('📶 تم الحفظ محلياً (سيتم المزامنة تلقائياً)');
         manualInput.value = '';
+        finishManualAdd();
       }
     }
 
@@ -1335,46 +1603,102 @@
       });
     }
 
-    function syncOfflineQueue(){
-      if(offlineQueue.length === 0 || !isFirebaseReady || isSyncingQueue) return;
-      isSyncingQueue = true;
-      const queue = [...offlineQueue];
-      offlineQueue = [];
-      try { localStorage.removeItem('offline_queue'); } catch(e) {}
+    function createOfflineOperationId(){
+      try {
+        if(window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      } catch(e) {}
+      return 'op_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 12);
+    }
 
-      const currentWeekKey = getCurrentWeekKey();
-      queue.forEach(item => {
-        // Preserve the week in which an offline action actually happened.
-        // Legacy queue items fall back to the current week.
-        const itemWeekKey = item.weekKey || currentWeekKey;
-        if (item.type === 'tap') {
-          database.ref('totalCount').transaction((v) => (v || 0) + item.value);
-          if (item.user) {
-            database.ref('leaderboard/' + itemWeekKey + '/' + item.user).transaction((v) => (v || 0) + item.value);
-            bumpAllTimeTotal(item.user, item.value, false);
-          }
-        }
-        else if (item.type === 'manualAdd' && item.user) {
-          const ref = database.ref('weeklyManualAdditions/' + itemWeekKey + '/' + item.user);
-          ref.transaction((currentVal) => {
-            const newVal = (currentVal || 0) + item.value;
-            if(newVal > WEEKLY_MANUAL_LIMIT) return undefined;
-            return newVal;
-          }, (error, committed) => {
-            if(committed){
-              database.ref('totalCount').transaction((v) => (v || 0) + item.value);
-              database.ref('leaderboard/' + itemWeekKey + '/' + item.user).transaction((v) => (v || 0) + item.value);
-              bumpAllTimeTotal(item.user, item.value, true);
-            }
-          });
+    function ensureOfflineOperationIds(){
+      let changed = false;
+      offlineQueue.forEach(item => {
+        if(item && !item.id){
+          item.id = createOfflineOperationId();
+          changed = true;
         }
       });
-      isSyncingQueue = false;
-      if(queue.length > 0) showToast('✅ تمت مزامنة ' + queue.length + ' عملية معلقة');
+      if(changed){
+        try { localStorage.setItem('offline_queue', JSON.stringify(offlineQueue)); } catch(e) {}
+      }
+    }
+
+    async function syncOfflineQueue(){
+      if(offlineQueue.length === 0 || !isFirebaseReady || isSyncingQueue) return;
+      isSyncingQueue = true;
+      // Process only the items that existed when this sync started. New taps can
+      // arrive while the awaits below are running; they must remain in the live
+      // queue instead of being overwritten at the end of this batch.
+      ensureOfflineOperationIds();
+      const batch = offlineQueue.slice();
+      const remaining = [];
+      let syncedCount = 0;
+      let blockedManual = 0;
+      let rejectedCount = 0;
+
+      try {
+      for(const item of batch){
+        if(!item.weekKey || !item.user || !Number.isFinite(Number(item.value)) || Number(item.value) <= 0){
+          rejectedCount++;
+          continue;
+        }
+
+        try {
+          // An offline manual addition belongs to the week in which it was made.
+          // Re-read that exact week's server total before replaying it, so a stale
+          // local cache or another device cannot silently push it over 99,999.
+          if(item.type === 'manualAdd'){
+            const manualRef = database.ref('weeklyManualAdditions/' + item.weekKey + '/' + item.user);
+            const snap = await manualRef.once('value');
+            const serverManual = Number(snap.val()) || 0;
+            if(serverManual + Number(item.value) > WEEKLY_MANUAL_LIMIT){
+              remaining.push(item);
+              blockedManual++;
+              continue;
+            }
+          }
+
+          await atomicCountUpdate(item.user, Number(item.value), item.weekKey, item.type === 'manualAdd');
+          syncedCount++;
+        } catch(e) {
+          const code = String((e && e.code) || '').toLowerCase();
+          if(code.includes('permission')){
+            // Retrying a permanent rules rejection forever only traps the queue.
+            rejectedCount++;
+          } else {
+            remaining.push(item);
+          }
+        }
+      }
+
+      // Preserve anything appended while this batch was synchronizing by
+      // stable operation id, not by array position.
+      const batchIds = new Set(batch.map(item => item.id));
+      const appendedDuringSync = offlineQueue.filter(item => !batchIds.has(item.id));
+      offlineQueue = remaining.concat(appendedDuringSync);
+      try {
+        if(offlineQueue.length) localStorage.setItem('offline_queue', JSON.stringify(offlineQueue));
+        else localStorage.removeItem('offline_queue');
+      } catch(e) {}
+      if(syncedCount > 0) showToast('✅ تمت مزامنة ' + syncedCount + ' عملية معلقة');
+      if(blockedManual > 0) showToast('⚠️ توجد إضافة يدوية معلقة تتجاوز حد أسبوعها ولم تُرسل', 5500);
+      else if(offlineQueue.length > 0) showToast('⚠️ بقيت عمليات غير متزامنة محفوظة على الجهاز، ولن تضيع', 5000);
+      if(rejectedCount > 0) showToast('⚠️ تم استبعاد ' + rejectedCount + ' عملية غير صالحة أو مرفوضة نهائياً', 5000);
+      } finally {
+        isSyncingQueue = false;
+      }
     }
 
     function saveToOfflineQueue(type, value, user, weekKey = getCurrentWeekKey()){
-      offlineQueue.push({type, value, user, weekKey});
+      const numericValue = Number(value);
+      if(!Number.isFinite(numericValue) || numericValue <= 0) return;
+      ensureOfflineOperationIds();
+      const last = offlineQueue[offlineQueue.length - 1];
+      if(type === 'tap' && last && last.type === 'tap' && last.user === user && last.weekKey === weekKey && Number(last.value) + numericValue <= 99999){
+        last.value = Number(last.value) + numericValue;
+      } else {
+        offlineQueue.push({id:createOfflineOperationId(), type, value:numericValue, user, weekKey});
+      }
       try {
         localStorage.setItem('offline_queue', JSON.stringify(offlineQueue));
       } catch(e) {}
@@ -1411,22 +1735,39 @@
 
     function hitTotal(amount = 1){
       const weekKey = getCurrentWeekKey();
-      if(isFirebaseReady){
-        database.ref('totalCount').transaction((v) => (v || 0) + amount);
-        if(currentUser) {
-          database.ref('leaderboard/' + weekKey + '/' + currentUser).transaction((v) => (v || 0) + amount);
-          bumpAllTimeTotal(currentUser, amount, false);
-        }
-      } else {
-        saveToOfflineQueue('tap', amount, currentUser, weekKey);
-        total += amount;
-        try { localStorage.setItem('offline_total', String(total)); } catch(e) {}
-        render();
+      if(isFirebaseReady && currentUser){
+        return atomicCountUpdate(currentUser, amount, weekKey, false).then(() => true).catch((err) => {
+          const code = String((err && err.code) || '').toLowerCase();
+          if(code.includes('permission')){
+            showToast('❌ رفضت قاعدة البيانات هذه الضغطة');
+            return false;
+          }
+          // The outcome of an online write can be ambiguous after a sudden
+          // network failure. Normal UI taps are not blindly replayed because
+          // Firebase may already have committed them.
+          showToast('⚠️ تعذر تأكيد ضغطة أثناء انقطاع مفاجئ بالشبكة؛ لن نكرر إرسالها تلقائياً لتجنب العد المزدوج', 5500);
+          setTimeout(() => {
+            if(isFirebaseReady){
+              loadTotalFromFirebase();
+              loadLeaderboardFromFirebase();
+              loadAllTimeTotal();
+            }
+          }, 2500);
+          return false;
+        });
       }
+
+      if(!currentUser) return Promise.resolve(false);
+      saveToOfflineQueue('tap', amount, currentUser, weekKey);
+      total += amount;
+      try { localStorage.setItem('offline_total', String(total)); } catch(e) {}
+      render();
+      return Promise.resolve(true);
     }
 
     function loadLeaderboardFromFirebase(){
       const weekKey = getCurrentWeekKey();
+      activeWeekKey = weekKey;
       if(leadRef) leadRef.off();
       leadRef = database.ref('leaderboard/' + weekKey);
       leadRef.on('value', (s) => {
@@ -1453,16 +1794,18 @@
         const sorted = Object.entries(data).sort((a, b) => {
           const diff = (Number(b[1]) || 0) - (Number(a[1]) || 0);
           if (diff !== 0) return diff;
-          const pa = prevPos.has(a[0]) ? prevPos.get(a[0]) : Infinity;
-          const pb = prevPos.has(b[0]) ? prevPos.get(b[0]) : Infinity;
-          return pa === pb ? 0 : (pa < pb ? -1 : 1);
+          const hasA = prevPos.has(a[0]);
+          const hasB = prevPos.has(b[0]);
+          if(hasA && hasB) return prevPos.get(a[0]) - prevPos.get(b[0]);
+          if(hasA !== hasB) return hasA ? -1 : 1;
+          return String(a[0]).localeCompare(String(b[0]), 'ar', { sensitivity:'base' });
         });
         lastRankOrder = sorted.map(([name]) => name);
 
         const satStart = getWeekStartSaturday();
         const friEnd = new Date(satStart);
-        friEnd.setDate(friEnd.getDate() + 6);
-        weekInfo.textContent = '📅 الأسبوع ' + getWeekNumber() + ' - ' + satStart.getFullYear() +
+        friEnd.setUTCDate(friEnd.getUTCDate() + 6);
+        weekInfo.textContent = '📅 الأسبوع ' + getWeekNumber() + ' - ' + satStart.getUTCFullYear() +
           ' (من ' + formatDateAr(satStart) + ' إلى ' + formatDateAr(friEnd) + ')';
 
         if(sorted.length === 0){
@@ -1491,10 +1834,18 @@
       }
     }
 
-    function tap(){
-      if(addToTotal && !currentUser){ showToast('❌ سجّل اسمك أولاً للمشاركة في عدّ الصلاة على النبي ﷺ المشترك'); return; }
+    function tap(nativeBubbleAlreadyCounted = false){
+      if(addToTotal && !currentUser){ showToast('❌ سجّل اسمك أولاً للمشاركة في عدّ الصلاة على النبي ﷺ المشترك'); return false; }
       current++;
-      bubbleCount++;
+
+      if(nativeBubbleAlreadyCounted && window.AndroidBridge && typeof AndroidBridge.getNativeBubbleCount === 'function'){
+        try {
+          const nativeCount = Number(AndroidBridge.getNativeBubbleCount());
+          if(Number.isFinite(nativeCount) && nativeCount >= 0) bubbleCount = nativeCount;
+        } catch(e) {}
+      } else {
+        bubbleCount++;
+      }
       saveBubbleCount();
       vibrate(12);
 
@@ -1509,6 +1860,40 @@
         hitTotal(1);
       }
       incrementPersonal();
+      saveSessionState();
+      return true;
+    }
+
+    async function nativeBubbleTapAsync(){
+      if(addToTotal && !currentUser) return false;
+
+      // For shared salawat, do not acknowledge the native pending tap until
+      // Firebase confirms the write or the tap is durably queued offline.
+      if(addToTotal){
+        const accepted = await hitTotal(1);
+        if(!accepted) return false;
+      }
+
+      current++;
+      if(window.AndroidBridge && typeof AndroidBridge.getNativeBubbleCount === 'function'){
+        try {
+          const nativeCount = Number(AndroidBridge.getNativeBubbleCount());
+          if(Number.isFinite(nativeCount) && nativeCount >= 0) bubbleCount = nativeCount;
+        } catch(e) {}
+      }
+      saveBubbleCount();
+      vibrate(12);
+
+      if(!isInfinite && current >= activeTarget){
+        cyclesThisSession++;
+        vibrate([40,30,40,30,80]);
+        showToast('✅ أتممت ' + activeTarget + ' – ' + activeDhikr);
+        current = 0;
+      }
+      render();
+      incrementPersonal();
+      saveSessionState();
+      return true;
     }
 
     function setDhikr(dhikr, target, addTotal){
@@ -1523,6 +1908,8 @@
         buildBeads(activeTarget);
       }
       current = 0;
+      cyclesThisSession = 0;
+      saveSessionState();
       render();
     }
 
@@ -1533,6 +1920,9 @@
     bubbleResetBtn.addEventListener('click', () => {
       bubbleCount = 0;
       saveBubbleCount();
+      if(window.AndroidBridge && typeof AndroidBridge.resetNativeBubbleCount === 'function'){
+        try { AndroidBridge.resetNativeBubbleCount(); } catch(e) {}
+      }
       render();
       showToast('🔄 تم تصفير عدّاد الفقاعة فقط');
     });
@@ -1540,9 +1930,25 @@
     try {
       const savedQueue = localStorage.getItem('offline_queue');
       if(savedQueue) {
-        offlineQueue = JSON.parse(savedQueue);
+        const parsedQueue = JSON.parse(savedQueue);
+        offlineQueue = Array.isArray(parsedQueue) ? parsedQueue : [];
+        if(!Array.isArray(parsedQueue)) localStorage.removeItem('offline_queue');
+        else ensureOfflineOperationIds();
       }
-    } catch(e) {}
+    } catch(e) {
+      offlineQueue = [];
+      try { localStorage.removeItem('offline_queue'); } catch(ignore) {}
+    }
+
+    function setOfflineStatus(){
+      onlineIndicator.className = 'status-offline';
+      onlineIndicator.textContent = '○';
+      connectionStatus.textContent = '⚠️ غير متصل';
+      connectionStatus.style.borderColor = '#e57373';
+      connectionStatus.style.color = '#e57373';
+      connectionStatus.style.background = 'rgba(229,115,115,0.15)';
+    }
+    setTimeout(() => { if(!isFirebaseReady) setOfflineStatus(); }, 10000);
 
     const connectedRef = database.ref('.info/connected');
     connectedRef.on('value', (snap) => {
@@ -1563,12 +1969,7 @@
         }
       } else {
         isFirebaseReady = false;
-        onlineIndicator.className = 'status-offline';
-        onlineIndicator.textContent = '○';
-        connectionStatus.textContent = '⚠️ غير متصل';
-        connectionStatus.style.borderColor = '#e57373';
-        connectionStatus.style.color = '#e57373';
-        connectionStatus.style.background = 'rgba(229,115,115,0.15)';
+        setOfflineStatus();
 
         try {
           const saved = localStorage.getItem('offline_total');
@@ -1593,6 +1994,7 @@
     resetBtn.addEventListener('click', () => {
       current = 0;
       cyclesThisSession = 0;
+      saveSessionState();
       render();
     });
     personalResetBtn.addEventListener('click', async () => {
@@ -1627,7 +2029,11 @@
     toggleLeaderboardBtn.addEventListener('click', toggleLeaderboard);
 
     deviceId = getOrCreateDeviceId();
-    setDhikr('اللهم صل على محمد وآله وسلم', '∞', 'true');
+    if(!loadSessionState()){
+      setDhikr('اللهم صل على محمد وآله وسلم', '∞', 'true');
+    } else {
+      render();
+    }
     loadPersonal();
     loadUserName();
     loadBubbleState();
@@ -1645,7 +2051,13 @@
       }
     } catch(e) {}
 
-    window.androidTap = tap;
+    // Volume-key/in-app taps use normal counting. Native overlay taps have
+    // already incremented bubble_count in FloatingService, so replay them
+    // without incrementing the bubble display a second time.
+    window.androidTap = () => tap(false);
+    window.androidBubbleTap = () => tap(true);
+    window.androidBubbleTapAsync = nativeBubbleTapAsync;
+    window.getCurrentParticipantName = () => currentUser || '';
   })();
 </script>
 </body>

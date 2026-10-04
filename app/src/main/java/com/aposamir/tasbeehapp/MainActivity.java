@@ -1,10 +1,12 @@
 package com.aposamir.tasbeehapp;
 
+import android.Manifest;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -65,11 +67,28 @@ public class MainActivity extends AppCompatActivity {
     private BroadcastReceiver bubbleReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            webView.evaluateJavascript("javascript:androidTap();", null);
+            webView.evaluateJavascript("javascript:androidBubbleTap();", null);
         }
     };
 
     public class WebAppInterface {
+
+        @JavascriptInterface
+        public int getNativeBubbleCount() {
+            SharedPreferences prefs = getSharedPreferences("bubble_prefs", MODE_PRIVATE);
+            return prefs.getInt("bubble_count", 0);
+        }
+
+        @JavascriptInterface
+        public void resetNativeBubbleCount() {
+            SharedPreferences prefs = getSharedPreferences("bubble_prefs", MODE_PRIVATE);
+            prefs.edit().putInt("bubble_count", 0).apply();
+
+            Intent intent = new Intent("WEB_UPDATED");
+            intent.setPackage(getPackageName());
+            intent.putExtra("count", 0);
+            sendBroadcast(intent);
+        }
 
         @JavascriptInterface
         public void updateCount(int count) {
@@ -105,13 +124,36 @@ public class MainActivity extends AppCompatActivity {
             }
             Intent intent = new Intent(MainActivity.this, FloatingService.class);
             intent.putExtra("scale", scale);
-            startService(intent);
+            requestNotificationPermissionOnce();
+            ContextCompat.startForegroundService(MainActivity.this, intent);
         }
 
         @JavascriptInterface
         public void hideBubble() {
-            stopService(new Intent(MainActivity.this, FloatingService.class));
+            Intent stop = new Intent(MainActivity.this, FloatingService.class);
+            stop.setAction(FloatingService.ACTION_STOP);
+            try {
+                startService(stop);
+            } catch (RuntimeException e) {
+                stopService(new Intent(MainActivity.this, FloatingService.class));
+            }
         }
+    }
+
+    // Android 13+: ask once so the small "bubble is running" notification is visible.
+    // The bubble still works if the user declines.
+    private void requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return;
+        SharedPreferences prefs = getSharedPreferences("bubble_prefs", MODE_PRIVATE);
+        if (prefs.getBoolean("notification_permission_asked", false)) return;
+        prefs.edit().putBoolean("notification_permission_asked", true).apply();
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1001);
+            }
+        });
     }
 
     @Override
